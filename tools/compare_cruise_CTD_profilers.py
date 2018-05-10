@@ -17,7 +17,6 @@ deployment #1; R00001 = compare data from the instrument to the CTD cast that wa
 """
 
 import pandas as pd
-import sys
 from seabird.cnv import fCNV
 import requests
 import datetime
@@ -25,6 +24,7 @@ import matplotlib.pyplot as plt
 import os
 from geopy.distance import geodesic
 from collections import OrderedDict
+import numpy as np
 
 
 def data_request_url(session, rd):
@@ -116,187 +116,200 @@ def return_uframe_response(url, session, username, token):
         print 'Request failed'
 
 
-def main(sDir, api_key, api_token, refdes, deployment):
+def main(sDir, api_key, api_token, refdes, deployments):
     rd = refdes.split('-')
     summary = OrderedDict()
 
-    # Get information from the cruise CTD-to-platform mapping files to grab the cruise CTD data that would overlap
-    # with some data from the selected platform
-    cruisedata_repo = 'https://raw.githubusercontent.com/seagrinch/data-team-python/master/cruise_data'
-    p_CTD_map = pd.read_csv('/'.join((cruisedata_repo, 'platform_CTDcast_mapping.csv'))).fillna('')
-    CTDcasts = pd.read_csv('/'.join((cruisedata_repo, 'cruise_CTDs.csv'))).fillna('')
+    count = 0
+    for deployment in deployments:
+        print '\nAnalyzing {} deployment {}'.format(refdes, deployment)
+        count += 1
+        # Get information from the cruise CTD-to-platform mapping files to grab the cruise CTD data that would overlap
+        # with some data from the selected platform
+        cruisedata_repo = 'https://raw.githubusercontent.com/seagrinch/data-team-python/master/cruise_data'
+        p_CTD_map = pd.read_csv('/'.join((cruisedata_repo, 'platform_CTDcast_mapping.csv'))).fillna('')
+        CTDcasts = pd.read_csv('/'.join((cruisedata_repo, 'cruise_CTDs.csv'))).fillna('')
 
-    info = p_CTD_map.loc[(p_CTD_map.platform == rd[0]) & (p_CTD_map.Deployment == deployment)]
-    ploc = [info.iloc[0]['lat'], info.iloc[0]['lon']]  # platform deployment location from asset management
+        info = p_CTD_map.loc[(p_CTD_map.platform == rd[0]) & (p_CTD_map.Deployment == deployment)]
+        ploc = [info.iloc[0]['lat'], info.iloc[0]['lon']]  # platform deployment location from asset management
 
-    if info.iloc[0]['CTDcast'] == '':
-        print 'No CTD cast identified for {} {}. Ending program'.format(rd[0], deployment)
-        sys.exit()
+        if info.iloc[0]['CTDcast'] == '':
+            print 'No CTD cast identified for {} {}'.format(rd[0], deployment)
+            summary[count] = OrderedDict()
+            summary[count]['refdes'] = refdes
+            summary[count]['deployment'] = deployment
+            summary[count]['notes'] = 'No CTD cast identified for {} {}'.format(rd[0], deployment)
+            continue
 
-    cruise, cruise_len = format_str(info.iloc[0]['CTD_CruiseName'])
-    cruiseleg, cruiseleg_len = format_str(info.iloc[0]['CTD_CruiseLeg'])
-    cast, cast_len = format_str(info.iloc[0]['CTDcast'])
+        cruise, cruise_len = format_str(info.iloc[0]['CTD_CruiseName'])
+        cruiseleg, cruiseleg_len = format_str(info.iloc[0]['CTD_CruiseLeg'])
+        cast, cast_len = format_str(info.iloc[0]['CTDcast'])
 
-    if cruise_len == cruiseleg_len == cast_len:
-        cast_info_list = zip(cruise, cruiseleg, cast)
-    else:
-        if cruise_len != cruiseleg_len and cruiseleg_len == cast_len:
-            cast_info_list = zip(cruise * cruiseleg_len, cruiseleg, cast)
-        if cruise_len == cruiseleg_len and cruiseleg_len != cast_len:
-            cast_info_list = zip(cruise * cast_len, cruiseleg * cast_len, cast)
-        if cruiseleg == [''] and cruise_len == cast_len:
-            cast_info_list = zip(cruise, cruiseleg * cruise_len, cast)
+        if cruise_len == cruiseleg_len == cast_len:
+            cast_info_list = zip(cruise, cruiseleg, cast)
         else:
-            print "!! Check CTD_CruiseName, CTD_CruiseLeg, CTDcast info. Lengths of lists don't match up !!"
+            if cruise_len != cruiseleg_len and cruiseleg_len == cast_len:
+                cast_info_list = zip(cruise * cruiseleg_len, cruiseleg, cast)
+            if cruise_len == cruiseleg_len and cruiseleg_len != cast_len:
+                cast_info_list = zip(cruise * cast_len, cruiseleg * cast_len, cast)
+            if cruiseleg == [''] and cruise_len == cast_len:
+                cast_info_list = zip(cruise, cruiseleg * cruise_len, cast)
+            else:
+                print "!! Check CTD_CruiseName, CTD_CruiseLeg, CTDcast info. Lengths of lists don't match up !!"
 
-    for i, c in enumerate(cast_info_list):
-        # select the information from the CTD cast identified in the mapping table
-        CTDcast_info = CTDcasts.loc[(CTDcasts.CTD_CruiseName == c[0]) & (CTDcasts.CTD_CruiseLeg == c[1]) & (CTDcasts.CTDcast == str(c[2]))]
+        for i, c in enumerate(cast_info_list):
+            # select the information from the CTD cast identified in the mapping table
+            CTDcast_info = CTDcasts.loc[(CTDcasts.CTD_CruiseName == c[0]) & (CTDcasts.CTD_CruiseLeg == c[1]) & (CTDcasts.CTDcast == str(c[2]))]
 
-        fCTD = ''.join([CTDcast_info.iloc[0]['filepath_primary'], CTDcast_info.iloc[0]['CTD_rawdata_filepath']])
-        print 'CTD filename: {}'.format(fCTD)
+            fCTD = ''.join([CTDcast_info.iloc[0]['filepath_primary'], CTDcast_info.iloc[0]['CTD_rawdata_filepath']])
+            print 'CTD filename: {}'.format(fCTD)
 
-        # Open the raw CTD file
-        profile = fCNV(fCTD)
+            # Open the raw CTD file
+            profile = fCNV(fCTD)
 
-        # CTD cast information
-        CTDloc = [profile.attributes['LATITUDE'], profile.attributes['LONGITUDE']]  # CTD cast location
-        diff_loc = round(geodesic(ploc, CTDloc).kilometers,4)
-        print 'The CTD cast was done {} km from the mooring location'.format(diff_loc)
-        CTDdate = profile.attributes['datetime'].strftime('%Y-%m-%dT%H:%M:%S')
+            # CTD cast information
+            CTDloc = [profile.attributes['LATITUDE'], profile.attributes['LONGITUDE']]  # CTD cast location
+            diff_loc = round(geodesic(ploc, CTDloc).kilometers,4)
+            print 'The CTD cast was done {} km from the mooring location'.format(diff_loc)
+            CTDdate = profile.attributes['datetime'].strftime('%Y-%m-%dT%H:%M:%S')
 
-        if c[1] == '':
-            ptitle = 'Cruise ' + CTDcast_info.iloc[0]['CUID'] + ' Cast ' + str(c[2]) + ': ' + CTDdate + \
-                     ' (distance {} km)'.format(diff_loc)
-        else:
-            ptitle = 'Cruise ' + CTDcast_info.iloc[0]['CUID'] + ' Leg ' + c[1] + ' Cast ' + str(c[2]) + ': ' + CTDdate + \
-                     ' (distance {} km)'.format(diff_loc)
+            if c[1] == '':
+                ptitle = 'Cruise ' + CTDcast_info.iloc[0]['CUID'] + ' Cast ' + str(c[2]) + ': ' + CTDdate + \
+                         ' (distance {} km)'.format(diff_loc)
+            else:
+                ptitle = 'Cruise ' + CTDcast_info.iloc[0]['CUID'] + ' Leg ' + c[1] + ' Cast ' + str(c[2]) + ': ' + CTDdate + \
+                         ' (distance {} km)'.format(diff_loc)
 
-        # Try variations in variable names
-        param_notes = []
-        try:
-            conductivity = profile['CNDC'].data
-        except KeyError:
+            # Try variations in variable names
+            param_notes = []
             try:
-                conductivity = profile['c1mS/cm'].data / 10
+                conductivity = profile['CNDC'].data
             except KeyError:
-                print 'No conductivity variable found in the cruise CTD file'
-                param_notes.append('No conductivity variable found in the cruise CTD file')
-                conductivity = []
+                try:
+                    conductivity = profile['c1mS/cm'].data / 10
+                except KeyError:
+                    print 'No conductivity variable found in the cruise CTD file'
+                    param_notes.append('No conductivity variable found in the cruise CTD file')
+                    conductivity = []
 
-        try:
-            density = profile['density'].data
-        except KeyError:
             try:
-                density = profile['sigma-\xe900'].data + 1000
+                density = profile['density'].data
             except KeyError:
-                print 'No density variable found in the cruise CTD file'
-                param_notes.append('No density variable found in the cruise CTD file')
-                density = []
+                try:
+                    density = profile['sigma-\xe900'].data + 1000
+                except KeyError:
+                    print 'No density variable found in the cruise CTD file'
+                    param_notes.append('No density variable found in the cruise CTD file')
+                    density = []
 
 
-        CTDcast_data = {
-            'pres': {'values': profile['PRES'].data, 'units': 'db'},
-            'temp': {'values': profile['TEMP'].data, 'units': 'deg C'},
-            'cond': {'values': conductivity, 'units': 'S/m'},
-            'sal': {'values': profile['PSAL'].data, 'units': 'PSU'},
-            'den': {'values': density, 'units': 'kg/m^3'},
-            'chla': {'values': profile['flECO-AFL'].data, 'units': 'ug/L'}  # mg/m^3 is the same as ug/L
-        }
+            CTDcast_data = {
+                'pres': {'values': profile['PRES'].data, 'units': 'db'},
+                'temp': {'values': profile['TEMP'].data, 'units': 'deg C'},
+                'cond': {'values': conductivity, 'units': 'S/m'},
+                'sal': {'values': profile['PSAL'].data, 'units': 'PSU'},
+                'den': {'values': density, 'units': 'kg/m^3'},
+                'chla': {'values': profile['flECO-AFL'].data, 'units': 'ug/L'}  # mg/m^3 is the same as ug/L
+            }
 
-        # specify the date of the cruise CTD cast for the uFrame API request
-        params = {
-            'beginDT': profile.attributes['datetime'].strftime('%Y-%m-%dT00:00:00.000Z'),
-            'endDT': (profile.attributes['datetime'] + datetime.timedelta(days=1)).strftime('%Y-%m-%dT00:00:00.000Z'),
-            #'beginDT': (profile.attributes['datetime'] + datetime.timedelta(days=1)).strftime('%Y-%m-%dT00:00:00.000Z'), # take the day after the cruise CTD
-            #'endDT': (profile.attributes['datetime'] + datetime.timedelta(days=2)).strftime('%Y-%m-%dT00:00:00.000Z'),
-            'limit': 10000
-        }
+            # specify the date of the cruise CTD cast for the uFrame API request
+            params = {
+                'beginDT': profile.attributes['datetime'].strftime('%Y-%m-%dT00:00:00.000Z'),
+                'endDT': (profile.attributes['datetime'] + datetime.timedelta(days=1)).strftime('%Y-%m-%dT00:00:00.000Z'),
+                #'beginDT': (profile.attributes['datetime'] + datetime.timedelta(days=1)).strftime('%Y-%m-%dT00:00:00.000Z'), # take the day after the cruise CTD
+                #'endDT': (profile.attributes['datetime'] + datetime.timedelta(days=2)).strftime('%Y-%m-%dT00:00:00.000Z'),
+                'limit': 10000
+            }
 
-        # Build the url for the data request from uFrame
-        session = requests.session()
-        method, stream, request_url = data_request_url(session, rd)
+            # Build the url for the data request from uFrame
+            session = requests.session()
+            method, stream, request_url = data_request_url(session, rd)
 
-        summary[i] = OrderedDict()
-        summary[i]['refdes'] = refdes
-        summary[i]['method'] = method
-        summary[i]['stream'] = stream
-        summary[i]['deployment'] = deployment
-        summary[i]['platform_lat_lon'] = ploc
-        summary[i]['cruise'] = c[0]
-        summary[i]['CUID'] = CTDcast_info.iloc[0]['CUID']
-        summary[i]['cruiseleg'] = c[1]
-        summary[i]['cast'] = str(c[2])
-        summary[i]['cruiseCTDcast_date'] = profile.attributes['datetime'].strftime('%Y-%m-%dT%H:%M:%SZ')
-        summary[i]['cruiseCTDcast_lat_lon'] = CTDloc
-        summary[i]['cruiseCTDcast_platform_loc_diff_km'] = diff_loc
-        summary[i]['cruiseCTDcast_filename'] = fCTD
-        summary[i]['param_notes'] = param_notes
-        summary[i]['uframe_data_date'] = params['beginDT']
+            id = str(count) + str(i)
+            summary[id] = OrderedDict()
+            summary[id]['refdes'] = refdes
+            summary[id]['method'] = method
+            summary[id]['stream'] = stream
+            summary[id]['deployment'] = deployment
+            summary[id]['platform_lat_lon'] = ploc
+            summary[id]['cruise'] = c[0]
+            summary[id]['CUID'] = CTDcast_info.iloc[0]['CUID']
+            summary[id]['cruiseleg'] = c[1]
+            summary[id]['cast'] = str(c[2])
+            summary[id]['cruiseCTDcast_date'] = profile.attributes['datetime'].strftime('%Y-%m-%dT%H:%M:%SZ')
+            summary[id]['cruiseCTDcast_lat_lon'] = CTDloc
+            summary[id]['cruiseCTDcast_platform_loc_diff_km'] = diff_loc
+            summary[id]['cruiseCTDcast_filename'] = fCTD
+            summary[id]['notes'] = param_notes
+            summary[id]['uframe_data_date'] = params['beginDT']
 
-        # Request data from uFrame
-        print 'Requesting data from uFrame'
-        r = session.get(request_url, params=params, auth=(api_key, api_token))
+            # Request data from uFrame
+            print 'Requesting data from uFrame'
+            r = session.get(request_url, params=params, auth=(api_key, api_token))
 
-        if r.status_code != 200:
-            print r.json()['message']
-            summary[i]['uframe_message'] = r.json()['message']
-        elif r.status_code == 200:
-            summary[i]['uframe_message'] = 'Data request successful'
-            data = r.json()
+            if r.status_code != 200:
+                print r.json()['message']
+                summary[id]['uframe_message'] = r.json()['message']
+            elif r.status_code == 200:
+                summary[id]['uframe_message'] = 'Data request successful'
+                data = r.json()
 
-            uF = {}
+                uF = {}
 
-            if 'CTD' in refdes:
-                keys = ['time', 'pres', 'temp', 'cond', 'sal', 'den']
-                for k in keys:
-                    uF.setdefault(k, [])
+                if 'CTD' in refdes:
+                    keys = ['time', 'pres', 'temp', 'cond', 'sal', 'den']
+                    for k in keys:
+                        uF.setdefault(k, [])
 
-                for i in range(len(data)):
-                    uF['time'].append(ntp_seconds_to_datetime(data[i]['time']))
-                    uF['pres'].append(data[i]['ctdpf_ckl_seawater_pressure'])
-                    uF['temp'].append(data[i]['ctdpf_ckl_seawater_temperature'])
-                    uF['cond'].append(data[i]['ctdpf_ckl_seawater_conductivity'])
-                    uF['sal'].append(data[i]['practical_salinity'])
-                    uF['den'].append(data[i]['density'])
+                    for i in range(len(data)):
+                        uF['time'].append(ntp_seconds_to_datetime(data[i]['time']))
+                        uF['pres'].append(data[i]['ctdpf_ckl_seawater_pressure'])
+                        uF['temp'].append(data[i]['ctdpf_ckl_seawater_temperature'])
+                        uF['cond'].append(data[i]['ctdpf_ckl_seawater_conductivity'])
+                        uF['sal'].append(data[i]['practical_salinity'])
+                        uF['den'].append(data[i]['density'])
 
-                print 'Plotting CTD data'
-                cast_args = (CTDcast_data['pres']['values'], CTDcast_data['cond']['values'], CTDcast_data['temp']['values'])
-                uF_args = (uF['pres'], uF['cond'], uF['temp'])
-                units = (CTDcast_data['pres']['units'], CTDcast_data['cond']['units'], CTDcast_data['temp']['units'])
-                labels = ('Conductivity', 'Temperature')
-                fname = '_'.join((refdes, deployment, method, c[0], c[1], c[2], 'cond_temp'))
-                sfile = os.path.join(sDir,fname)
-                profile_plot_panel(cast_args, uF_args, units, labels, ptitle, sfile, params['beginDT'][0:10])
+                    print 'Plotting CTD data'
+                    cast_args = (CTDcast_data['pres']['values'], CTDcast_data['cond']['values'], CTDcast_data['temp']['values'])
+                    uF_args = (uF['pres'], uF['cond'], uF['temp'])
+                    units = (CTDcast_data['pres']['units'], CTDcast_data['cond']['units'], CTDcast_data['temp']['units'])
+                    labels = ('Conductivity', 'Temperature')
+                    fname = '_'.join((refdes, deployment, method, c[0], c[1], c[2], 'cond_temp'))
+                    sfile = os.path.join(sDir,fname)
+                    profile_plot_panel(cast_args, uF_args, units, labels, ptitle, sfile, params['beginDT'][0:10])
 
-                cast_args = (CTDcast_data['pres']['values'], CTDcast_data['sal']['values'], CTDcast_data['den']['values'])
-                uF_args = (uF['pres'], uF['sal'], uF['den'])
-                units = (CTDcast_data['pres']['units'], CTDcast_data['sal']['units'], CTDcast_data['den']['units'])
-                labels = ('Salinity', 'Density')
-                fname = '_'.join((refdes, deployment, method, c[0], c[1], c[2], 'sal_den'))
-                sfile = os.path.join(sDir,fname)
-                profile_plot_panel(cast_args, uF_args, units, labels, ptitle, sfile, params['beginDT'][0:10])
+                    if len(CTDcast_data['den']['values']) == 0:
+                        den_values = np.asarray([None] * len(CTDcast_data['pres']['values']))
+                    else:
+                        den_values = CTDcast_data['den']['values']
+                    cast_args = (CTDcast_data['pres']['values'], CTDcast_data['sal']['values'], den_values)
+                    uF_args = (uF['pres'], uF['sal'], uF['den'])
+                    units = (CTDcast_data['pres']['units'], CTDcast_data['sal']['units'], CTDcast_data['den']['units'])
+                    labels = ('Salinity', 'Density')
+                    fname = '_'.join((refdes, deployment, method, c[0], c[1], c[2], 'sal_den'))
+                    sfile = os.path.join(sDir,fname)
+                    profile_plot_panel(cast_args, uF_args, units, labels, ptitle, sfile, params['beginDT'][0:10])
 
-            if 'FLOR' in refdes:
-                keys = ['time', 'pres', 'chla']
-                for k in keys:
-                    uF.setdefault(k, [])
+                if 'FLOR' in refdes:
+                    keys = ['time', 'pres', 'chla']
+                    for k in keys:
+                        uF.setdefault(k, [])
 
-                for i in range(len(data)):
-                    uF['time'].append(ntp_seconds_to_datetime(data[i]['time']))
-                    uF['pres'].append(data[i]['int_ctd_pressure'])
-                    uF['chla'].append(data[i]['fluorometric_chlorophyll_a'])
+                    for i in range(len(data)):
+                        uF['time'].append(ntp_seconds_to_datetime(data[i]['time']))
+                        uF['pres'].append(data[i]['int_ctd_pressure'])
+                        uF['chla'].append(data[i]['fluorometric_chlorophyll_a'])
 
-                print 'Plotting FLOR data'
-                cast_args = (CTDcast_data['pres']['values'], CTDcast_data['chla']['values'])
-                uF_args = (uF['pres'], uF['chla'])
-                units = (CTDcast_data['pres']['units'], CTDcast_data['chla']['units'])
-                label = 'Fluorometric Chlorophyll-a'
-                fname = '_'.join((refdes, deployment, method, c[0], c[1], c[2], 'chla'))
-                sfile = os.path.join(sDir, fname)
-                profile_plot_single(cast_args, uF_args, units, label, ptitle, sfile, params['beginDT'][0:10])
+                    print 'Plotting FLOR data'
+                    cast_args = (CTDcast_data['pres']['values'], CTDcast_data['chla']['values'])
+                    uF_args = (uF['pres'], uF['chla'])
+                    units = (CTDcast_data['pres']['units'], CTDcast_data['chla']['units'])
+                    label = 'Fluorometric Chlorophyll-a'
+                    fname = '_'.join((refdes, deployment, method, c[0], c[1], c[2], 'chla'))
+                    sfile = os.path.join(sDir, fname)
+                    profile_plot_single(cast_args, uF_args, units, label, ptitle, sfile, params['beginDT'][0:10])
 
-    sname = refdes + '_cruise_CTD_summary.csv'
+    sname = refdes + '_cruise_CTD_summary_{}.csv'.format(datetime.datetime.now().strftime('%Y%m%dT%H%M%S'))
     pd.DataFrame.from_dict(summary, orient='index').to_csv(os.path.join(sDir, sname), index=False)
 
 
@@ -305,5 +318,5 @@ if __name__ == '__main__':
     api_key = 'username'
     api_token = 'token'
     refdes = 'CP02PMUO-WFP01-03-CTDPFK000'
-    deployment = 'D00009'  #R00009
-    main(sDir, api_key, api_token, refdes, deployment)
+    deployment = ['D00010', 'R00010']
+    main(sDir, api_key, api_token, refdes, deployments)
